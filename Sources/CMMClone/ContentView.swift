@@ -32,66 +32,61 @@ struct ContentView: View {
     @StateObject private var system = SystemStats()
 
     var body: some View {
-        HStack(spacing: 0) {
-            SidebarView(selection: $selection)
-                .frame(width: 220)
-                .frame(maxHeight: .infinity)
-                .background(.ultraThinMaterial)
-                .overlay(alignment: .trailing) {
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(width: 1)
-                }
+        ZStack {
+            AuroraBackground()
 
-            Group {
-                switch selection {
-                case .dashboard:
-                    DashboardView(system: system) { module in
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                            selection = module
+            VStack(spacing: 0) {
+                TopBarView(selection: $selection)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 10)
+
+                Group {
+                    switch selection {
+                    case .dashboard:
+                        DashboardView(system: system) { module in
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                                selection = module
+                            }
                         }
+                    case .memory:
+                        MemoryView(system: system)
+                    case .junk:
+                        JunkView()
+                    case .uninstaller:
+                        UninstallerView()
                     }
-                case .memory:
-                    MemoryView(system: system)
-                case .junk:
-                    JunkView()
-                case .uninstaller:
-                    UninstallerView()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(AuroraBackground())
         }
         .frame(minWidth: 780, minHeight: 560)
         .onAppear { system.start() }
     }
 }
 
-struct SidebarView: View {
+struct TopBarView: View {
     @Binding var selection: Module
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 Image(systemName: "sparkles")
-                    .font(.title2)
+                    .font(.title3)
                     .foregroundStyle(
                         LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
                     )
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("CMM Clone")
-                        .font(.headline)
-                    Text("macOS Cleanup")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("CMM Clone")
+                    .font(.system(size: 14, weight: .semibold))
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 18)
+            .padding(.leading, 60)  // leave room for traffic lights
+            .padding(.trailing, 16)
 
-            VStack(spacing: 4) {
+            Spacer(minLength: 0)
+
+            HStack(spacing: 4) {
                 ForEach(Module.allCases) { module in
-                    SidebarButton(
+                    TopBarButton(
                         module: module,
                         isSelected: selection == module
                     ) {
@@ -101,53 +96,55 @@ struct SidebarView: View {
                     }
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(4)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            )
 
-            Spacer()
+            Spacer(minLength: 0)
 
-            Text("v1.0")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.bottom, 10)
-                .padding(.horizontal, 14)
+            // Right-side spacer to keep center-alignment balanced
+            Color.clear.frame(width: 120, height: 1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-struct SidebarButton: View {
+struct TopBarButton: View {
     let module: Module
     let isSelected: Bool
     let action: () -> Void
 
-    @State private var isHovering = false
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
                 Image(systemName: module.icon)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(isSelected ? .white : module.tint)
-                    .frame(width: 22)
                 Text(module.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
                     .foregroundStyle(isSelected ? .white : .primary)
-                Spacer()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(
                         isSelected
                             ? AnyShapeStyle(LinearGradient(colors: [module.tint, module.tint.opacity(0.75)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                            : AnyShapeStyle(isHovering ? Color.primary.opacity(0.08) : Color.clear)
+                            : AnyShapeStyle(hovering ? Color.primary.opacity(0.08) : Color.clear)
                     )
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHover { hovering = $0 }
     }
 }
 

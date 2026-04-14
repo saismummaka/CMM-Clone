@@ -300,10 +300,12 @@ struct AppCheckRow: View {
     let onToggle: () -> Void
 
     @State private var hovering = false
+    @State private var showingInfo = false
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 12) {
+        HStack(spacing: 12) {
+            // Custom checkbox (click on the row toggles)
+            Button(action: onToggle) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(app.selected ? Color.clear : Color.primary.opacity(0.25), lineWidth: 1.5)
@@ -322,48 +324,174 @@ struct AppCheckRow: View {
                             .foregroundStyle(.white)
                     }
                 }
+            }
+            .buttonStyle(.plain)
 
-                if let icon = app.icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 32, height: 32)
-                } else {
-                    Image(systemName: "app").frame(width: 32, height: 32)
-                }
+            // Row body — clicking toggles selection
+            Button(action: onToggle) {
+                HStack(spacing: 12) {
+                    if let icon = app.icon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 32, height: 32)
+                    } else {
+                        Image(systemName: "app").frame(width: 32, height: 32)
+                    }
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(app.name)
-                        .font(.system(size: 14, weight: .medium))
-                        .lineLimit(1)
-                    Text(app.bundleID.isEmpty ? "—" : app.bundleID)
-                        .font(.caption2)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(app.name)
+                            .font(.system(size: 14, weight: .medium))
+                            .lineLimit(1)
+                        Text(app.bundleID.isEmpty ? "—" : app.bundleID)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer()
+                    Text(ByteFormatter.string(app.sizeBytes))
+                        .font(.callout)
+                        .fontDesign(.rounded)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                 }
-                Spacer()
-                Text(ByteFormatter.string(app.sizeBytes))
-                    .font(.callout)
-                    .fontDesign(.rounded)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Info button — stops click propagation via its own Button
+            Button {
+                showingInfo.toggle()
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(
-                        app.selected
-                            ? Color.pink.opacity(0.08)
-                            : (hovering ? Color.primary.opacity(0.05) : Color.clear)
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(app.selected ? Color.pink.opacity(0.4) : Color.clear, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingInfo, arrowEdge: .trailing) {
+                AppInfoPopover(app: app)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    app.selected
+                        ? Color.pink.opacity(0.08)
+                        : (hovering ? Color.primary.opacity(0.05) : Color.clear)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(app.selected ? Color.pink.opacity(0.4) : Color.clear, lineWidth: 1)
+        )
         .onHover { hovering = $0 }
+    }
+}
+
+struct AppInfoPopover: View {
+    let app: InstalledApp
+    @State private var paths: [(String, Int64)] = []
+    @State private var loading = true
+
+    var totalBytes: Int64 {
+        app.sizeBytes + paths.reduce(0) { $0 + $1.1 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                if let icon = app.icon {
+                    Image(nsImage: icon).resizable().frame(width: 36, height: 36)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(app.name).font(.headline)
+                    Text("Files that will be deleted")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    // App bundle itself
+                    PathRow(path: app.path, size: app.sizeBytes, isPrimary: true)
+
+                    if loading {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Finding related files...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    } else if paths.isEmpty {
+                        Text("No additional support files found.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(Array(paths.enumerated()), id: \.offset) { _, entry in
+                            PathRow(path: entry.0, size: entry.1, isPrimary: false)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+
+            Divider()
+
+            HStack {
+                Text("Total").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(ByteFormatter.string(totalBytes))
+                    .font(.callout.bold())
+                    .fontDesign(.rounded)
+            }
+        }
+        .padding(14)
+        .frame(width: 440)
+        .task {
+            await load()
+        }
+    }
+
+    private func load() async {
+        loading = true
+        let found = await Task.detached(priority: .userInitiated) { () -> [(String, Int64)] in
+            let p = AppScanner.leftoverPaths(for: app)
+            return p.map { path in
+                let size = JunkScanner.directorySize(path) + (JunkScanner.fileSize(path) ?? 0)
+                return (path, size)
+            }.sorted { $0.1 > $1.1 }
+        }.value
+        paths = found
+        loading = false
+    }
+}
+
+struct PathRow: View {
+    let path: String
+    let size: Int64
+    let isPrimary: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: isPrimary ? "app.fill" : "folder")
+                .foregroundStyle(isPrimary ? .pink : .secondary)
+                .frame(width: 16)
+            Text(path)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Text(ByteFormatter.string(size))
+                .font(.caption.bold())
+                .fontDesign(.rounded)
+                .foregroundStyle(.secondary)
+        }
     }
 }

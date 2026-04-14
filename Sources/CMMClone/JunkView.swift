@@ -146,13 +146,17 @@ final class JunkScanner: ObservableObject {
 
     nonisolated static func directorySize(_ path: String) -> Int64 {
         let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: path) else { return 0 }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else { return 0 }
+        // Skip TCC-protected locations unless we already have access — probing them
+        // would trigger a system permission prompt.
+        if !fm.isReadableFile(atPath: path) { return 0 }
         var total: Int64 = 0
-        if let enumerator = FileManager.default.enumerator(
+        if let enumerator = fm.enumerator(
             at: url,
             includingPropertiesForKeys: [.fileAllocatedSizeKey, .isRegularFileKey],
             options: [.skipsHiddenFiles],
-            errorHandler: { _, _ in true }
+            errorHandler: { _, _ in true }  // silently skip inaccessible items
         ) {
             for case let fileURL as URL in enumerator {
                 if let values = try? fileURL.resourceValues(forKeys: [.fileAllocatedSizeKey, .isRegularFileKey]),

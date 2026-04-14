@@ -29,7 +29,13 @@ swiftc \
     -o "$APP/Contents/MacOS/CMMClone" \
     "$SRC"/*.swift
 
-# Codesign (ad-hoc) so it runs without Gatekeeper complaining
-codesign --force --deep --sign - "$APP"
+# Strip extended attributes that iCloud adds (prevents codesign failure)
+xattr -cr "$APP" 2>/dev/null || true
+
+# Codesign (ad-hoc) with stable identifier so TCC recognizes the app across rebuilds
+codesign --force --deep \
+    --identifier com.sai.cmmclone \
+    --options runtime \
+    --sign - "$APP"
 
 echo "Built: $APP"
