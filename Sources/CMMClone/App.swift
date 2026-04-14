@@ -8,6 +8,5 @@ struct CMMCloneApp: App {
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
     }
 }

@@ -32,10 +32,17 @@ struct ContentView: View {
     @StateObject private var system = SystemStats()
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             SidebarView(selection: $selection)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
-        } detail: {
+                .frame(width: 220)
+                .frame(maxHeight: .infinity)
+                .background(.ultraThinMaterial)
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(width: 1)
+                }
+
             Group {
                 switch selection {
                 case .dashboard:
@@ -55,6 +62,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AuroraBackground())
         }
+        .frame(minWidth: 900, minHeight: 600)
         .onAppear { system.start() }
     }
 }
@@ -104,7 +112,6 @@ struct SidebarView: View {
                 .padding(.horizontal, 14)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial)
     }
 }
 
