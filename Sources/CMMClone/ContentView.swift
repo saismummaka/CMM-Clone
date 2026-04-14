@@ -62,7 +62,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AuroraBackground())
         }
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(minWidth: 780, minHeight: 560)
         .onAppear { system.start() }
     }
 }

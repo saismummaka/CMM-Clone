@@ -13,13 +13,6 @@ struct InstalledApp: Identifiable, Hashable {
     var selected: Bool = false
 }
 
-struct LeftoverItem: Identifiable, Hashable {
-    let id = UUID()
-    let path: String
-    let size: Int64
-    var selected: Bool = true
-}
-
 @MainActor
 final class AppScanner: ObservableObject {
     @Published var apps: [InstalledApp] = []
@@ -29,6 +22,14 @@ final class AppScanner: ObservableObject {
     var filteredApps: [InstalledApp] {
         if filter.isEmpty { return apps }
         return apps.filter { $0.name.localizedCaseInsensitiveContains(filter) || $0.bundleID.localizedCaseInsensitiveContains(filter) }
+    }
+
+    var selectedCount: Int {
+        apps.filter { $0.selected }.count
+    }
+
+    var selectedSize: Int64 {
+        apps.filter { $0.selected }.reduce(0) { $0 + $1.sizeBytes }
     }
 
     func scan() async {
@@ -47,9 +48,17 @@ final class AppScanner: ObservableObject {
             }
         }
 
-        // sort by name
         apps = found.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         isScanning = false
+    }
+
+    func toggle(_ app: InstalledApp) {
+        guard let idx = apps.firstIndex(where: { $0.id == app.id }) else { return }
+        apps[idx].selected.toggle()
+    }
+
+    func clearSelection() {
+        for i in apps.indices { apps[i].selected = false }
     }
 
     nonisolated static func info(for appPath: String) -> InstalledApp? {
@@ -65,7 +74,6 @@ final class AppScanner: ObservableObject {
         return InstalledApp(name: name, bundleID: bundleID, path: appPath, version: version, sizeBytes: size, icon: icon)
     }
 
-    // Find associated files for an app bundleID / name
     nonisolated static func leftoverPaths(for app: InstalledApp) -> [String] {
         let home = NSHomeDirectory()
         let id = app.bundleID
@@ -112,304 +120,250 @@ final class AppScanner: ObservableObject {
 
 struct UninstallerView: View {
     @StateObject private var scanner = AppScanner()
-    @State private var selectedApp: InstalledApp?
-    @State private var leftovers: [LeftoverItem] = []
-    @State private var scanningLeftovers = false
     @State private var uninstalling = false
     @State private var resultMessage: String?
+    @State private var showingConfirm = false
 
     var body: some View {
-        HSplitView {
-            leftPane
-                .frame(minWidth: 340, idealWidth: 380)
-            rightPane
-                .frame(minWidth: 420)
-        }
-        .task { await scanner.scan() }
-    }
-
-    private var leftPane: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
             VStack(alignment: .leading, spacing: 6) {
                 Text("Uninstaller")
                     .font(.largeTitle.bold())
-                Text("Remove apps and their hidden leftovers.")
+                Text("Select apps to remove. Hidden caches, configs, and support files go with them.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 28)
             .padding(.top, 28)
+            .padding(.bottom, 16)
 
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Filter apps", text: $scanner.filter)
-                    .textFieldStyle(.plain)
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.ultraThinMaterial))
-            .padding(.horizontal, 24)
-
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(scanner.filteredApps) { app in
-                        AppRow(
-                            app: app,
-                            isSelected: selectedApp?.id == app.id
-                        ) {
-                            selectedApp = app
-                            Task { await findLeftovers(for: app) }
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
-            }
-
-            if scanner.isScanning {
+            // Toolbar
+            HStack(spacing: 10) {
                 HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Scanning applications...")
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Filter apps", text: $scanner.filter)
+                        .textFieldStyle(.plain)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.ultraThinMaterial))
+                .frame(maxWidth: 280)
+
+                Spacer()
+
+                if scanner.selectedCount > 0 {
+                    Button {
+                        scanner.clearSelection()
+                    } label: {
+                        Text("Clear")
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.ultraThinMaterial))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    showingConfirm = true
+                } label: {
+                    HStack(spacing: 6) {
+                        if uninstalling {
+                            ProgressView().controlSize(.small).tint(.white)
+                        } else {
+                            Image(systemName: "xmark.bin")
+                        }
+                        Text(uninstalling ? "Removing..." : "Uninstall \(scanner.selectedCount > 0 ? "(\(scanner.selectedCount))" : "")")
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(
+                                scanner.selectedCount > 0
+                                    ? AnyShapeStyle(LinearGradient(colors: [.pink, .red], startPoint: .leading, endPoint: .trailing))
+                                    : AnyShapeStyle(Color.gray.opacity(0.3))
+                            )
+                    )
+                    .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(scanner.selectedCount == 0 || uninstalling)
+            }
+            .padding(.horizontal, 28)
+            .padding(.bottom, 12)
+
+            // Status row
+            HStack {
+                if scanner.isScanning {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Scanning applications...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("\(scanner.apps.count) apps · \(scanner.selectedCount) selected")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 18)
-            }
-        }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(.ultraThinMaterial)
-    }
-
-    private var rightPane: some View {
-        ScrollView {
-            if let app = selectedApp {
-                VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 16) {
-                        if let icon = app.icon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .frame(width: 64, height: 64)
-                        } else {
-                            Image(systemName: "app")
-                                .font(.system(size: 48))
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(app.name).font(.title.bold())
-                            Text(app.bundleID).font(.caption).foregroundStyle(.secondary)
-                            Text("v\(app.version) · \(ByteFormatter.string(app.sizeBytes))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-
-                    HStack {
-                        Text("Associated Files")
-                            .font(.title3.bold())
-                        Spacer()
-                        Text(ByteFormatter.string(leftoversTotalBytes))
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if scanningLeftovers {
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text("Finding related files...")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if leftovers.isEmpty {
-                        Text("No associated files found.")
-                            .foregroundStyle(.secondary)
-                            .font(.callout)
-                    } else {
-                        VStack(spacing: 8) {
-                            ForEach(Array(leftovers.enumerated()), id: \.element.id) { idx, item in
-                                LeftoverRow(item: item) { newSelected in
-                                    leftovers[idx].selected = newSelected
-                                }
-                            }
-                        }
-                    }
-
-                    HStack(spacing: 12) {
-                        Button(action: { Task { await uninstall(app: app) } }) {
-                            HStack(spacing: 8) {
-                                if uninstalling {
-                                    ProgressView().controlSize(.small).tint(.white)
-                                } else {
-                                    Image(systemName: "xmark.bin")
-                                }
-                                Text(uninstalling ? "Uninstalling..." : "Uninstall Completely")
-                                    .fontWeight(.semibold)
-                            }
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(LinearGradient(colors: [.pink, .red], startPoint: .leading, endPoint: .trailing))
-                            )
-                            .foregroundStyle(.white)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(uninstalling)
-                    }
-
-                    if let msg = resultMessage {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-                            Text(msg)
-                        }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(.green.opacity(0.12))
-                        )
-                    }
+                Spacer()
+                if scanner.selectedCount > 0 {
+                    Text(ByteFormatter.string(scanner.selectedSize))
+                        .font(.caption.bold())
+                        .fontDesign(.rounded)
+                        .foregroundStyle(LinearGradient(colors: [.pink, .red], startPoint: .leading, endPoint: .trailing))
                 }
-                .padding(28)
-            } else {
-                VStack(spacing: 14) {
-                    Image(systemName: "xmark.bin")
-                        .font(.system(size: 56))
-                        .foregroundStyle(.secondary.opacity(0.5))
-                    Text("Select an app to uninstall")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                    Text("You'll see its related files and caches before removing everything.")
+            }
+            .padding(.horizontal, 28)
+            .padding(.bottom, 8)
+
+            if let msg = resultMessage {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                    Text(msg)
                         .font(.callout)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
                 }
-                .padding(40)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.green.opacity(0.12)))
+                .padding(.horizontal, 28)
+                .padding(.bottom, 8)
+            }
+
+            // App list
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(scanner.filteredApps) { app in
+                        AppCheckRow(app: app) {
+                            scanner.toggle(app)
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
             }
         }
-    }
-
-    private var leftoversTotalBytes: Int64 {
-        leftovers.reduce(0) { $0 + $1.size }
-    }
-
-    private func findLeftovers(for app: InstalledApp) async {
-        scanningLeftovers = true
-        resultMessage = nil
-        leftovers = []
-        let paths = AppScanner.leftoverPaths(for: app)
-        var items: [LeftoverItem] = []
-        for p in paths {
-            let size = JunkScanner.directorySize(p) + (JunkScanner.fileSize(p) ?? 0)
-            items.append(LeftoverItem(path: p, size: size))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task { await scanner.scan() }
+        .alert("Uninstall \(scanner.selectedCount) app\(scanner.selectedCount == 1 ? "" : "s")?", isPresented: $showingConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Uninstall", role: .destructive) {
+                Task { await uninstallSelected() }
+            }
+        } message: {
+            Text("This will permanently remove the selected apps along with their caches, preferences, containers, and launch agents. This cannot be undone.")
         }
-        leftovers = items.sorted { $0.size > $1.size }
-        scanningLeftovers = false
     }
 
-    private func uninstall(app: InstalledApp) async {
+    private func uninstallSelected() async {
         uninstalling = true
-        let fm = FileManager.default
+        let toRemove = scanner.apps.filter { $0.selected }
         var freed: Int64 = 0
+        var removedNames: [String] = []
+        let fm = FileManager.default
 
-        // Delete associated files first
-        for item in leftovers where item.selected {
-            let size = item.size
+        for app in toRemove {
+            // Find leftovers
+            let paths = AppScanner.leftoverPaths(for: app)
+            for p in paths {
+                let size = JunkScanner.directorySize(p) + (JunkScanner.fileSize(p) ?? 0)
+                do {
+                    try fm.removeItem(atPath: p)
+                    freed += size
+                } catch { /* ignore */ }
+            }
+            // Remove .app
+            let appSize = app.sizeBytes
             do {
-                try fm.removeItem(atPath: item.path)
-                freed += size
+                try fm.removeItem(atPath: app.path)
+                freed += appSize
+                removedNames.append(app.name)
             } catch {
-                // ignore permission denials
+                if (try? fm.trashItem(at: URL(fileURLWithPath: app.path), resultingItemURL: nil)) != nil {
+                    freed += appSize
+                    removedNames.append(app.name)
+                }
             }
         }
 
-        // Delete the app bundle itself
-        let appSize = app.sizeBytes
-        do {
-            try fm.removeItem(atPath: app.path)
-            freed += appSize
-        } catch {
-            // trying Trash as fallback
-            try? fm.trashItem(at: URL(fileURLWithPath: app.path), resultingItemURL: nil)
-        }
-
-        resultMessage = "Removed \(app.name) and \(ByteFormatter.string(freed)) of associated data."
-        selectedApp = nil
-        leftovers = []
+        let count = removedNames.count
+        resultMessage = "Removed \(count) app\(count == 1 ? "" : "s") · freed \(ByteFormatter.string(freed))"
         uninstalling = false
         await scanner.scan()
     }
 }
 
-struct AppRow: View {
+struct AppCheckRow: View {
     let app: InstalledApp
-    let isSelected: Bool
-    let action: () -> Void
+    let onToggle: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
+        Button(action: onToggle) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(app.selected ? Color.clear : Color.primary.opacity(0.25), lineWidth: 1.5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(
+                                    app.selected
+                                        ? AnyShapeStyle(LinearGradient(colors: [.pink, .red], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                        : AnyShapeStyle(Color.clear)
+                                )
+                        )
+                        .frame(width: 20, height: 20)
+                    if app.selected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+
                 if let icon = app.icon {
                     Image(nsImage: icon)
                         .resizable()
-                        .frame(width: 28, height: 28)
+                        .frame(width: 32, height: 32)
                 } else {
-                    Image(systemName: "app").frame(width: 28, height: 28)
+                    Image(systemName: "app").frame(width: 32, height: 32)
                 }
+
                 VStack(alignment: .leading, spacing: 1) {
                     Text(app.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isSelected ? .white : .primary)
-                    Text(ByteFormatter.string(app.sizeBytes))
+                        .font(.system(size: 14, weight: .medium))
+                        .lineLimit(1)
+                    Text(app.bundleID.isEmpty ? "—" : app.bundleID)
                         .font(.caption2)
-                        .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 Spacer()
+                Text(ByteFormatter.string(app.sizeBytes))
+                    .font(.callout)
+                    .fontDesign(.rounded)
+                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(
-                        isSelected
-                            ? AnyShapeStyle(LinearGradient(colors: [.pink, .red], startPoint: .topLeading, endPoint: .bottomTrailing))
-                            : AnyShapeStyle(hovering ? Color.primary.opacity(0.06) : Color.clear)
+                        app.selected
+                            ? Color.pink.opacity(0.08)
+                            : (hovering ? Color.primary.opacity(0.05) : Color.clear)
                     )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(app.selected ? Color.pink.opacity(0.4) : Color.clear, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-    }
-}
-
-struct LeftoverRow: View {
-    let item: LeftoverItem
-    let onToggle: (Bool) -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Toggle("", isOn: Binding(get: { item.selected }, set: { onToggle($0) }))
-                .toggleStyle(.switch)
-                .labelsHidden()
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
-            Text(item.path)
-                .font(.system(size: 12, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-            Text(ByteFormatter.string(item.size))
-                .font(.caption.bold())
-                .fontDesign(.rounded)
-                .foregroundStyle(.secondary)
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
     }
 }
